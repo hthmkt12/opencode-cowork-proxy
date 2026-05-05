@@ -32,7 +32,38 @@ export function hasCacheControl(messages: any[], system?: any): boolean {
   return false;
 }
 
-/** Extract cached_tokens from OpenAI usage.prompt_tokens_details */
+function tokenCount(...values: any[]): number {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+  }
+  return 0;
+}
+
+/** Extract cached token count from common OpenAI-compatible usage shapes. */
 export function extractCachedTokens(usage: any): number {
-  return usage?.prompt_tokens_details?.cached_tokens || 0;
+  return tokenCount(
+    usage?.prompt_tokens_details?.cached_tokens,
+    usage?.input_tokens_details?.cached_tokens,
+    usage?.cache_read_input_tokens,
+  );
+}
+
+/** Extract input token count from OpenAI, Anthropic, and OpenAI-compatible providers. */
+export function extractInputTokens(usage: any): number {
+  return tokenCount(
+    usage?.prompt_tokens,
+    usage?.input_tokens,
+    usage?.promptTokens,
+    usage?.inputTokens,
+  );
+}
+
+/** Extract output token count from OpenAI, Anthropic, and OpenAI-compatible providers. */
+export function extractOutputTokens(usage: any): number {
+  return tokenCount(
+    usage?.completion_tokens,
+    usage?.output_tokens,
+    usage?.completionTokens,
+    usage?.outputTokens,
+  );
 }

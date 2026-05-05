@@ -1,6 +1,8 @@
 /**
  * Converts Anthropic Messages response to OpenAI Chat Completions response.
  */
+import { extractInputTokens, extractOutputTokens } from '../../cache';
+
 export function formatAnthropicToOpenAI(response: any, model: string): any {
   const content = response.content || [];
 
@@ -49,11 +51,11 @@ export function formatAnthropicToOpenAI(response: any, model: string): any {
       },
     ],
     usage: response.usage
-      ? {
-          prompt_tokens: response.usage.input_tokens || 0,
-          completion_tokens: response.usage.output_tokens || 0,
-          total_tokens: (response.usage.input_tokens || 0) + (response.usage.output_tokens || 0),
-        }
+      ? (() => {
+          const input = extractInputTokens(response.usage);
+          const output = extractOutputTokens(response.usage);
+          return { prompt_tokens: input, completion_tokens: output, total_tokens: input + output };
+        })()
       : { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
   };
 }

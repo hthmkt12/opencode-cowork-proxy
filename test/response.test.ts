@@ -102,6 +102,19 @@ describe('formatOpenAIToAnthropic (OpenAI → Anthropic response)', () => {
     expect(result.usage.output_tokens).toBe(50);
   });
 
+  it('maps OpenAI-compatible input_tokens/output_tokens usage to Anthropic usage', () => {
+    const result = formatOpenAIToAnthropic({
+      choices: [{ message: { role: 'assistant', content: 'Hi' }, finish_reason: 'stop' }],
+      usage: { input_tokens: 1000, output_tokens: 50, cache_read_input_tokens: 400 },
+    }, 'deepseek-v4-pro');
+    expect(result.usage).toEqual({
+      input_tokens: 1000,
+      output_tokens: 50,
+      cache_read_input_tokens: 400,
+      cache_creation_input_tokens: 0,
+    });
+  });
+
   it('sets cache_read_input_tokens to 0 when no cached_tokens', () => {
     const result = formatOpenAIToAnthropic({
       choices: [{ message: { role: 'assistant', content: 'Hi' }, finish_reason: 'stop' }],
@@ -130,6 +143,15 @@ describe('formatAnthropicToOpenAI (Anthropic → OpenAI response)', () => {
     expect(result.choices[0].message.content).toBe('Hello from Claude!');
     expect(result.choices[0].finish_reason).toBe('stop');
     expect(result.usage).toEqual({ prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 });
+  });
+
+  it('maps prompt_tokens/completion_tokens usage when Anthropic upstream returns OpenAI-compatible usage', () => {
+    const result = formatAnthropicToOpenAI({
+      content: [{ type: 'text', text: 'Hello from Claude!' }],
+      stop_reason: 'end_turn',
+      usage: { prompt_tokens: 20, completion_tokens: 8 },
+    }, 'claude-sonnet-4-20250514');
+    expect(result.usage).toEqual({ prompt_tokens: 20, completion_tokens: 8, total_tokens: 28 });
   });
 
   it('converts a tool_use response', () => {

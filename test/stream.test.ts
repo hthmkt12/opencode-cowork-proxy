@@ -59,6 +59,20 @@ describe('streamOpenAIToAnthropic (OpenAI SSE → Anthropic SSE)', () => {
     expect(result).toContain('"output_tokens":3');
   });
 
+  it('counts input_tokens/output_tokens usage from OpenAI-compatible streams', async () => {
+    const openaiSSE = sseStream(
+      'data: {"id":"chatcmpl-123","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Hello"}}]}\n\n',
+      'data: {"id":"chatcmpl-123","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"input_tokens":12,"output_tokens":4,"cache_read_input_tokens":6}}\n\n',
+      'data: [DONE]\n\n',
+    );
+
+    const result = await collectStream(streamOpenAIToAnthropic(openaiSSE, 'test-model'));
+
+    expect(result).toContain('"input_tokens":12');
+    expect(result).toContain('"output_tokens":4');
+    expect(result).toContain('"cache_read_input_tokens":6');
+  });
+
   it('handles tool call streams', async () => {
     const openaiSSE = sseStream(
       'data: {"id":"chatcmpl-123","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_weather","arguments":""}}]}}]}\n\n',

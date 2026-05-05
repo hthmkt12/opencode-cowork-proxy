@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { hashSystemPrompt, hasCacheControl, extractCachedTokens } from '../src/cache';
+import { hashSystemPrompt, hasCacheControl, extractCachedTokens, extractInputTokens, extractOutputTokens } from '../src/cache';
 
 describe('hashSystemPrompt', () => {
   it('produces a stable hash for the same string', () => {
@@ -88,5 +88,29 @@ describe('extractCachedTokens', () => {
     expect(extractCachedTokens({
       prompt_tokens_details: { cached_tokens: 0 },
     })).toBe(0);
+  });
+
+  it('extracts cached tokens from Anthropic-compatible usage', () => {
+    expect(extractCachedTokens({ cache_read_input_tokens: 123 })).toBe(123);
+  });
+});
+
+describe('token usage extraction', () => {
+  it('extracts OpenAI-style usage tokens', () => {
+    const usage = { prompt_tokens: 10, completion_tokens: 5 };
+    expect(extractInputTokens(usage)).toBe(10);
+    expect(extractOutputTokens(usage)).toBe(5);
+  });
+
+  it('extracts Anthropic/OpenCode-compatible usage tokens', () => {
+    const usage = { input_tokens: 12, output_tokens: 7 };
+    expect(extractInputTokens(usage)).toBe(12);
+    expect(extractOutputTokens(usage)).toBe(7);
+  });
+
+  it('extracts camelCase usage tokens', () => {
+    const usage = { inputTokens: 20, outputTokens: 9 };
+    expect(extractInputTokens(usage)).toBe(20);
+    expect(extractOutputTokens(usage)).toBe(9);
   });
 });
