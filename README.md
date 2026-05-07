@@ -8,6 +8,12 @@ Claude normally speaks the Anthropic API format. OpenCode Go mostly speaks OpenA
 
 I covered how to set this up in Claude in [How to Use Claude Code for Free with OpenCode](https://vibestacklab.substack.com/p/how-to-use-claude-code-for-free-with).
 
+### Image / Vision Support
+
+When you attach an image in Claude Code and send it through this proxy, the request is automatically routed to **Qwen3.5 Plus** (`qwen3.5-plus`) — a vision-capable model on OpenCode Go. This happens transparently: the proxy detects image blocks in your request, translates them to OpenAI's image format, and overrides the model to Qwen3.5 Plus so the model can actually see the image.
+
+No configuration needed — it just works as long as you have an OpenCode Go subscription.
+
 ## Set Up In Claude
 
 If you want the fastest working setup, use `minimax-m2.5-free` as the first model.

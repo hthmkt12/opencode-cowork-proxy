@@ -144,4 +144,41 @@ describe('worker routing', () => {
       headers: { Authorization: `Bearer ${key}` },
     });
   });
+
+  it('overrides model to qwen3.5-plus when image attachments are present', async () => {
+    let capturedBody: any = null;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (_url, init: any) => {
+        capturedBody = JSON.parse(init.body);
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({
+        model: 'deepseek-v4-pro',
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: 'What is in this image?' },
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'abc123' } },
+          ],
+        }],
+        max_tokens: 1024,
+      }),
+    });
+
+    await worker.fetch(request);
+    expect(capturedBody.model).toBe('qwen3.5-plus');
+    expect(Array.isArray(capturedBody.messages[0].content)).toBe(true);
+    expect(capturedBody.messages[0].content).toEqual([
+      { type: 'text', text: 'What is in this image?' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,abc123' } },
+    ]);
+  });
 });
