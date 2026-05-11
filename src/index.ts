@@ -62,6 +62,15 @@ function hasImages(body: any): boolean {
   );
 }
 
+function upstreamErrorResponse(res: Response, body: string): Response {
+  const headers = new Headers();
+  for (const name of ["Content-Type", "Retry-After", "RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset"]) {
+    const value = res.headers.get(name);
+    if (value) headers.set(name, value);
+  }
+  return new Response(body, { status: res.status, headers });
+}
+
 async function handleRequest(request: Request): Promise<Response> {
   const route = routeConfig(request);
   const upstream = getUpstream(request, route.upstream);
@@ -85,7 +94,7 @@ async function handleRequest(request: Request): Promise<Response> {
           },
           body: JSON.stringify(openaiReq),
         });
-        if (!res.ok) return new Response(await res.text(), { status: res.status });
+        if (!res.ok) return upstreamErrorResponse(res, await res.text());
 
         if (openaiReq.stream) {
           return new Response(streamOpenAIToAnthropic(res.body as ReadableStream, openaiReq.model), {
@@ -121,7 +130,7 @@ async function handleRequest(request: Request): Promise<Response> {
           headers: anthropicHeaders(request, key!),
           body: JSON.stringify(anthReq),
         });
-        if (!res.ok) return new Response(await res.text(), { status: res.status });
+        if (!res.ok) return upstreamErrorResponse(res, await res.text());
 
         if (anthReq.stream) {
           return new Response(streamAnthropicToOpenAI(res.body as ReadableStream, anthReq.model), {
@@ -158,7 +167,7 @@ async function handleRequest(request: Request): Promise<Response> {
             method: "GET",
             headers: { "Authorization": `Bearer ${key}` },
       });
-      if (!res.ok) return new Response(await res.text(), { status: res.status });
+      if (!res.ok) return upstreamErrorResponse(res, await res.text());
       return new Response(await res.text(), { headers: { "Content-Type": "application/json" } });
   }
 

@@ -111,6 +111,33 @@ describe('worker routing', () => {
     }));
   });
 
+  it('preserves upstream rate limit headers on translated errors', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('{"error":"FreeUsageLimitError"}', {
+        status: 429,
+        headers: {
+          'Content-Type': 'application/json',
+          'Retry-After': '60',
+          'RateLimit-Reset': '1710000000',
+        },
+      }),
+    );
+
+    const request = new Request('https://proxy.example/zen/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({ model: 'minimax-m2.5-free', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+
+    const response = await worker.fetch(request);
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Content-Type')).toContain('application/json');
+    expect(response.headers.get('Retry-After')).toBe('60');
+    expect(response.headers.get('RateLimit-Reset')).toBe('1710000000');
+    expect(await response.text()).toBe('{"error":"FreeUsageLimitError"}');
+  });
+
   it('routes /go-prefixed model discovery to OpenCode Go models', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response('{"data":[]}', { status: 200, headers: { 'Content-Type': 'application/json' } }),
