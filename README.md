@@ -85,7 +85,7 @@ Known Zen model categories that should work through `/zen`:
 
 | Zen model category | Examples |
 |--------------------|----------|
-| OpenAI-compatible chat models | `qwen3.6-plus`, `qwen3.5-plus`, `minimax-m2.7`, `minimax-m2.5`, `minimax-m2.5-free`, `glm-5.1`, `glm-5`, `kimi-k2.5`, `kimi-k2.6`, `big-pickle`, `ling-2.6-flash`, `hy3-preview-free`, `nemotron-3-super-free` |
+| OpenAI-compatible chat models | `qwen3.6-plus`, `qwen3.5-plus`, `minimax-m2.7`, `minimax-m2.5`, `minimax-m2.5-free`, `glm-5.1`, `glm-5`, `kimi-k2.5`, `kimi-k2.6`, `big-pickle`, `deepseek-v4-flash-free`, `ring-2.6-1t-free`, `nemotron-3-super-free` |
 
 Known Zen model categories that do not work yet through this proxy:
 
