@@ -263,8 +263,8 @@ Prefix routes:
 Claude Desktop may reject model names that don't look like Anthropic models (e.g. `claude-sonnet-4-5` or `anthropic/claude-*`). To work around this, embed the real model name in the URL path after the prefix:
 
 ```
-YOUR_DEPLOYED_WORKER_URL/go/minimax-m2.5-free
-YOUR_DEPLOYED_WORKER_URL/zen/minimax-m2.5-free
+YOUR_DEPLOYED_WORKER_URL/zen/minimax-m2.5-free   # free Zen models
+YOUR_DEPLOYED_WORKER_URL/go/deepseek-v4-pro      # paid Go models
 ```
 
 Claude appends `/v1/messages`, so the full request becomes `YOUR_WORKER_URL/zen/minimax-m2.5-free/v1/messages`. The proxy extracts the model from the path and uses it regardless of what Claude sends in the request body.
