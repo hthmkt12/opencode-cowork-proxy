@@ -560,3 +560,97 @@ describe('worker routing', () => {
     expect(calls[1].model).toBe('mimo-v2.5-free');
   });
 });
+
+describe('count_tokens short-circuit', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('estimates tokens locally and never calls upstream', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+
+    const request = new Request('https://proxy.example/v1/messages/count_tokens', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({
+        system: 'You are a helpful assistant.',
+        messages: [
+          { role: 'user', content: 'Hello world from Claude.' },
+          { role: 'assistant', content: 'Hi there!' },
+        ],
+      }),
+    });
+
+    const response = await worker.fetch(request);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(typeof body.input_tokens).toBe('number');
+    expect(body.input_tokens).toBeGreaterThan(0);
+  });
+
+  it('adds 85 tokens per image block', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+
+    const request = new Request('https://proxy.example/v1/messages/count_tokens', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: 'a'.repeat(40) }, // 10 tokens
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'x' } },
+          ],
+        }],
+      }),
+    });
+
+    const response = await worker.fetch(request);
+    expect(fetchMock).not.toHaveBeenCalled();
+    const body = await response.json();
+    expect(body.input_tokens).toBe(10 + 85);
+  });
+
+  it('handles string system prompt and string message content', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+
+    const request = new Request('https://proxy.example/v1/messages/count_tokens', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({
+        system: 'abcde', // 5 chars → 2 tokens
+        messages: [{ role: 'user', content: 'abcdefgh' }], // 8 chars → 2 tokens
+      }),
+    });
+
+    const response = await worker.fetch(request);
+    expect(fetchMock).not.toHaveBeenCalled();
+    const body = await response.json();
+    expect(body.input_tokens).toBe(4);
+  });
+
+  it('returns at least 1 token for empty body', async () => {
+    const request = new Request('https://proxy.example/v1/messages/count_tokens', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: '{}',
+    });
+
+    const response = await worker.fetch(request);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.input_tokens).toBe(1);
+  });
+
+  it('requires a valid API key', async () => {
+    const request = new Request('https://proxy.example/v1/messages/count_tokens', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+    });
+
+    const response = await worker.fetch(request);
+    expect(response.status).toBe(401);
+  });
+});

@@ -98,6 +98,32 @@ function isRetriableError(res: Response, body: string): boolean {
   return false;
 }
 
+// Rough local token estimate so we can short-circuit Anthropic's
+// /v1/messages/count_tokens endpoint without paying for an upstream call.
+// Heuristic: ~1 token per 4 chars of text + 85 tokens per image (Anthropic spec).
+// This is intentionally a lower-bound estimate — Claude Desktop only uses it
+// to show a context-window progress bar, so precision is not critical.
+function estimateLocalInputTokens(body: any): number {
+  let chars = 0;
+  let images = 0;
+  const sys = body?.system;
+  if (typeof sys === 'string') chars += sys.length;
+  else if (Array.isArray(sys)) {
+    for (const s of sys) if (typeof s?.text === 'string') chars += s.text.length;
+  }
+  for (const msg of body?.messages || []) {
+    const c = msg?.content;
+    if (typeof c === 'string') chars += c.length;
+    else if (Array.isArray(c)) {
+      for (const part of c) {
+        if (part?.type === 'text' && typeof part.text === 'string') chars += part.text.length;
+        else if (part?.type === 'image') images++;
+      }
+    }
+  }
+  return Math.max(1, Math.ceil(chars / 4) + images * 85);
+}
+
 function upstreamErrorResponse(res: Response, body: string): Response {
   const headers = new Headers();
   for (const name of ["Content-Type", "Retry-After", "RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset"]) {
@@ -111,6 +137,23 @@ async function handleRequest(request: Request): Promise<Response> {
   const route = routeConfig(request);
   const upstream = getUpstream(request, route.upstream);
   const fmt = upstreamFormat(request);
+
+  // Short-circuit token counting: estimate locally so we don't burn
+  // an upstream request every time Claude Desktop refreshes its
+  // context-window progress bar. Precision is not critical here —
+  // the client only uses this to display a percentage.
+  if (route.path === '/v1/messages/count_tokens' && request.method === 'POST') {
+    const key = extractApiKey(request.headers);
+    const err = validateApiKey(key);
+    if (err) return authErrorResponse(err);
+
+    let body: any;
+    try { body = await request.json(); } catch { body = {}; }
+    const inputTokens = estimateLocalInputTokens(body);
+    return new Response(JSON.stringify({ input_tokens: inputTokens }), {
+      headers: { "Content-Type": "application/json" },
+    });
+  }
 
   // Anthropic → OpenAI (for Claude Desktop/Cowork → any OpenAI API)
   if (route.path === '/v1/messages' && request.method === 'POST') {
