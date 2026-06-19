@@ -246,7 +246,7 @@ describe('worker routing', () => {
     expect(body.model).toBe('claude-sonnet-4-5-20250514');
   });
 
-  it('does not override model when no model segment in path', async () => {
+  it('forces text requests to deepseek-v4-flash when no model segment in path', async () => {
     let capturedBody: any = null;
     vi.spyOn(globalThis, 'fetch').mockImplementation(
       async (_url, init: any) => {
@@ -268,13 +268,15 @@ describe('worker routing', () => {
     });
 
     await worker.fetch(request);
-    expect(capturedBody.model).toBe('deepseek-v4-pro');
+    expect(capturedBody.model).toBe('deepseek-v4-flash');
   });
 
-  it('overrides model to qwen3.6-plus when image attachments are present on the go path', async () => {
+  it('auto-routes /go image requests to /zen upstream with mimo-v2.5-free', async () => {
+    let capturedUrl: string | null = null;
     let capturedBody: any = null;
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async (_url, init: any) => {
+      async (url: any, init: any) => {
+        capturedUrl = url;
         capturedBody = JSON.parse(init.body);
         return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
           status: 200,
@@ -283,7 +285,7 @@ describe('worker routing', () => {
       },
     );
 
-    const request = new Request('https://proxy.example/v1/messages', {
+    const request = new Request('https://proxy.example/go/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': key },
       body: JSON.stringify({
@@ -301,7 +303,8 @@ describe('worker routing', () => {
 
     await worker.fetch(request);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(capturedBody.model).toBe('qwen3.6-plus');
+    expect(capturedUrl).toBe('https://opencode.ai/zen/v1/chat/completions');
+    expect(capturedBody.model).toBe('mimo-v2.5-free');
     expect(Array.isArray(capturedBody.messages[0].content)).toBe(true);
     expect(capturedBody.messages[0].content).toEqual([
       { type: 'text', text: 'What is in this image?' },
@@ -309,7 +312,7 @@ describe('worker routing', () => {
     ]);
   });
 
-  it('overrides model to qwen3.6-plus when image attachments are present on the zen path', async () => {
+  it('overrides model to mimo-v2.5-free when image attachments are present on the zen path', async () => {
     let capturedBody: any = null;
     vi.spyOn(globalThis, 'fetch').mockImplementation(
       async (_url, init: any) => {
@@ -338,6 +341,222 @@ describe('worker routing', () => {
     });
 
     await worker.fetch(request);
-    expect(capturedBody.model).toBe('qwen3.6-plus');
+    expect(capturedBody.model).toBe('mimo-v2.5-free');
+  });
+
+  it('does not auto-route /go image requests when user pinned a model in URL', async () => {
+    let capturedUrl: string | null = null;
+    let capturedBody: any = null;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (url: any, init: any) => {
+        capturedUrl = url;
+        capturedBody = JSON.parse(init.body);
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/go/deepseek-v4-flash/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-5-20250514',
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: 'What is in this image?' },
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'abc123' } },
+          ],
+        }],
+        max_tokens: 1024,
+      }),
+    });
+
+    await worker.fetch(request);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(capturedUrl).toBe('https://opencode.ai/zen/go/v1/chat/completions');
+    expect(capturedBody.model).toBe('deepseek-v4-flash');
+  });
+
+  it('defaults text-only requests to deepseek-v4-flash when no model is pinned in URL', async () => {
+    let capturedBody: any = null;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (_url, init: any) => {
+        capturedBody = JSON.parse(init.body);
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/zen/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({
+        model: 'minimax-m2.7',
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 1024,
+      }),
+    });
+
+    await worker.fetch(request);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(capturedBody.model).toBe('deepseek-v4-flash');
+  });
+
+  it('falls back to mimo-v2.5-free when deepseek-v4-flash returns 5xx', async () => {
+    const calls: any[] = [];
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (_url, init: any) => {
+        calls.push(JSON.parse(init.body));
+        if (calls.length === 1) {
+          return new Response('{"error":"upstream boom"}', { status: 503, headers: { 'Content-Type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'fallback ok' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/zen/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({
+        model: 'minimax-m2.7',
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 1024,
+      }),
+    });
+
+    await worker.fetch(request);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(calls[0].model).toBe('deepseek-v4-flash');
+    expect(calls[1].model).toBe('mimo-v2.5-free');
+  });
+
+  it('falls back to mimo-v2.5-free when deepseek-v4-flash returns 429', async () => {
+    const calls: any[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (_url, init: any) => {
+        calls.push(JSON.parse(init.body));
+        if (calls.length === 1) {
+          return new Response('{"error":"rate limited"}', { status: 429, headers: { 'Content-Type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/zen/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({
+        model: 'minimax-m2.7',
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 1024,
+      }),
+    });
+
+    await worker.fetch(request);
+    expect(calls[0].model).toBe('deepseek-v4-flash');
+    expect(calls[1].model).toBe('mimo-v2.5-free');
+  });
+
+  it('falls back to mimo-v2.5-free when deepseek-v4-flash returns an empty body', async () => {
+    const calls: any[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (_url, init: any) => {
+        calls.push(JSON.parse(init.body));
+        if (calls.length === 1) {
+          return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant' }, finish_reason: 'stop' }] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/zen/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({
+        model: 'minimax-m2.7',
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 1024,
+      }),
+    });
+
+    await worker.fetch(request);
+    expect(calls[0].model).toBe('deepseek-v4-flash');
+    expect(calls[1].model).toBe('mimo-v2.5-free');
+  });
+
+  it('does not fall back when user pinned a model in the URL path', async () => {
+    const calls: any[] = [];
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (_url, init: any) => {
+        calls.push(JSON.parse(init.body));
+        return new Response('{"error":"upstream boom"}', { status: 503, headers: { 'Content-Type': 'application/json' } });
+      },
+    );
+
+    const request = new Request('https://proxy.example/zen/kimi-k2.6/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-5-20250514',
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 1024,
+      }),
+    });
+
+    const response = await worker.fetch(request);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(calls[0].model).toBe('kimi-k2.6');
+    expect(response.status).toBe(503);
+  });
+
+  it('routes /go text fallback to /zen (vision model is Zen-only)', async () => {
+    const urls: string[] = [];
+    const calls: any[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (url: any, init: any) => {
+        urls.push(url);
+        calls.push(JSON.parse(init.body));
+        if (calls.length === 1) {
+          return new Response('{"error":"upstream boom"}', { status: 503, headers: { 'Content-Type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'fallback ok' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/go/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({
+        model: 'minimax-m2.7',
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 1024,
+      }),
+    });
+
+    await worker.fetch(request);
+    expect(urls[0]).toBe('https://opencode.ai/zen/go/v1/chat/completions');
+    expect(urls[1]).toBe('https://opencode.ai/zen/v1/chat/completions');
+    expect(calls[0].model).toBe('deepseek-v4-flash');
+    expect(calls[1].model).toBe('mimo-v2.5-free');
   });
 });
