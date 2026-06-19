@@ -62,6 +62,8 @@ Use these values in Claude's **Configure third-party Inference** screen:
 
 For the default example above, use `/go` so the default text model runs on Go. Image requests auto-switch to Zen under the hood. Use `/zen` instead if you want both text and image to stay on Zen. Do not add `/v1/messages` yourself. Claude adds the API path automatically.
 
+To pin a different model without the smart-routing defaults, append the model ID after the prefix: `YOUR_DEPLOYED_WORKER_URL/go/kimi-k2.6` uses `kimi-k2.6` on Go directly and skips the default + auto-route + fallback. See [Model Name Override](#model-name-override) for the full behavior matrix.
+
 ## What This Does
 
 The Worker accepts Claude's Anthropic-style requests at `/v1/messages`, converts them to OpenAI-style requests, and sends them to OpenCode Go by default.
@@ -267,9 +269,18 @@ Claude Desktop may reject model names that don't look like Anthropic models (e.g
 ```
 YOUR_DEPLOYED_WORKER_URL/zen/mimo-v2.5-free   # free Zen models
 YOUR_DEPLOYED_WORKER_URL/go/deepseek-v4-pro   # paid Go models
+YOUR_DEPLOYED_WORKER_URL/go/kimi-k2.6         # paid Go models, skip all smart routing
 ```
 
 Claude appends `/v1/messages`, so the full request becomes `YOUR_WORKER_URL/zen/mimo-v2.5-free/v1/messages`. The proxy extracts the model from the path and uses it regardless of what Claude sends in the request body.
+
+**What URL pinning skips** (use it when you want full control):
+
+| Behavior | Without URL pin | With URL pin (`/go/kimi-k2.6`) |
+|----------|-----------------|-------------------------------|
+| Default text model | Forced to `deepseek-v4-flash` | Uses the pinned model |
+| Image → Zen auto-route | `/go` image requests auto-switch to Zen upstream | Stays on `/go` even with images |
+| Fallback on failure | Tries `mimo-v2.5-free` on Zen if `deepseek-v4-flash` fails | Returns the original error to the client |
 
 **Usage:**
 1. Configure Claude with any Anthropic-looking model name (e.g. `claude-sonnet-4-5-20250514`) — this passes Claude's client-side validation.
