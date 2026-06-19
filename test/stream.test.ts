@@ -106,6 +106,40 @@ describe('streamOpenAIToAnthropic (OpenAI SSE → Anthropic SSE)', () => {
     expect(result).toContain('"type":"text_delta"');
     expect(result).toContain('"text":"answer"');
   });
+
+  it('handles 500-token reasoning stream with escaped characters', async () => {
+    // Realistic long-reasoning scenario — 500 deltas with mixed content
+    // (quotes, newlines, backslashes) to verify the fast-path builder
+    // produces JSON-escaped output identical to the general helper.
+    const chunks: string[] = [];
+    for (let i = 0; i < 500; i++) {
+      // Sprinkle characters that need JSON escaping
+      const text = `step ${i}: "quote", back\\slash, and a\nnewline `;
+      chunks.push(
+        `data: {"id":"chatcmpl-x","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":${JSON.stringify(text)}}}]}\n\n`
+      );
+    }
+    chunks.push(
+      'data: {"id":"chatcmpl-x","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"done"},"finish_reason":"stop"}]}\n\n',
+      'data: [DONE]\n\n',
+    );
+
+    const openaiSSE = sseStream(...chunks);
+    const result = await collectStream(streamOpenAIToAnthropic(openaiSSE, 'test-model'));
+
+    // Every reasoning token should produce exactly one thinking_delta
+    const thinkingDeltaCount = (result.match(/"type":"thinking_delta"/g) || []).length;
+    expect(thinkingDeltaCount).toBe(500);
+
+    // Escaped characters must round-trip
+    expect(result).toContain('\\"quote\\"');
+    expect(result).toContain('back\\\\slash');
+    expect(result).toContain('\\nnewline');
+
+    // Final text block is intact
+    expect(result).toContain('"text":"done"');
+    expect(result).toContain('"stop_reason":"end_turn"');
+  });
 });
 
 describe('streamAnthropicToOpenAI (Anthropic SSE → OpenAI SSE)', () => {

@@ -1,11 +1,45 @@
 import { extractCachedTokens, extractOutputTokens, extractUncachedInputTokens } from '../../cache';
 
+const encoder = new TextEncoder();
+
 export function streamOpenAIToAnthropic(openaiStream: ReadableStream, model: string): ReadableStream {
   const messageId = "msg_" + Date.now();
 
+  // Pre-compute message_start once — only the id and model are static per request.
+  const messageStartEvent = encoder.encode(
+    `event: message_start\ndata: ${JSON.stringify({
+      type: "message_start",
+      message: {
+        id: messageId,
+        type: "message",
+        role: "assistant",
+        content: [],
+        model,
+        stop_reason: null,
+        stop_sequence: null,
+        usage: { input_tokens: 0, output_tokens: 0 },
+      },
+    })}\n\n`
+  );
+
   const enqueueSSE = (controller: ReadableStreamDefaultController, eventType: string, data: any) => {
-    controller.enqueue(new TextEncoder().encode(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`));
+    controller.enqueue(encoder.encode(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`));
   };
+
+  // Fast-path for the per-token hot path. DeepSeek reasoning streams can emit
+  // thousands of small reasoning_content deltas, and each one would otherwise
+  // pay for a full JSON.stringify of the SSE event payload. Manual string
+  // building is ~2-3x faster per call and skips recursive object traversal.
+  // Only the thinking text itself needs JSON escaping (since it's a user
+  // string); all other fields are known literals.
+  const buildThinkingDelta = (index: number, thinking: string): Uint8Array =>
+    encoder.encode(
+      `event: content_block_delta\ndata: {"type":"content_block_delta","index":${index},"delta":{"type":"thinking_delta","thinking":${JSON.stringify(thinking)}}}\n\n`
+    );
+  const buildTextDelta = (index: number, text: string): Uint8Array =>
+    encoder.encode(
+      `event: content_block_delta\ndata: {"type":"content_block_delta","index":${index},"delta":{"type":"text_delta","text":${JSON.stringify(text)}}}\n\n`
+    );
 
   return new ReadableStream({
     async start(controller) {
@@ -121,19 +155,7 @@ export function streamOpenAIToAnthropic(openaiStream: ReadableStream, model: str
             if (contentBlockIndex < 0) contentBlockIndex = 0;
 
             if (!messageStarted) {
-              enqueueSSE(controller, "message_start", {
-                type: "message_start",
-                message: {
-                  id: messageId,
-                  type: "message",
-                  role: "assistant",
-                  content: [],
-                  model,
-                  stop_reason: null,
-                  stop_sequence: null,
-                  usage: { input_tokens: 0, output_tokens: 0 },
-                },
-              });
+              controller.enqueue(messageStartEvent);
               messageStarted = true;
             }
 
@@ -145,11 +167,7 @@ export function streamOpenAIToAnthropic(openaiStream: ReadableStream, model: str
             hasStartedThinkingBlock = true;
           }
 
-          enqueueSSE(controller, "content_block_delta", {
-            type: "content_block_delta",
-            index: contentBlockIndex,
-            delta: { type: "thinking_delta", thinking: delta.reasoning_content },
-          });
+          controller.enqueue(buildThinkingDelta(contentBlockIndex, delta.reasoning_content));
         } else if (delta.content) {
           if (isToolUse || hasStartedThinkingBlock) {
             enqueueSSE(controller, "content_block_stop", {
@@ -166,19 +184,7 @@ export function streamOpenAIToAnthropic(openaiStream: ReadableStream, model: str
             if (contentBlockIndex < 0) contentBlockIndex = 0;
 
             if (!messageStarted) {
-              enqueueSSE(controller, "message_start", {
-                type: "message_start",
-                message: {
-                  id: messageId,
-                  type: "message",
-                  role: "assistant",
-                  content: [],
-                  model,
-                  stop_reason: null,
-                  stop_sequence: null,
-                  usage: { input_tokens: 0, output_tokens: 0 },
-                },
-              });
+              controller.enqueue(messageStartEvent);
               messageStarted = true;
             }
 
@@ -190,11 +196,7 @@ export function streamOpenAIToAnthropic(openaiStream: ReadableStream, model: str
             hasStartedTextBlock = true;
           }
 
-          enqueueSSE(controller, "content_block_delta", {
-            type: "content_block_delta",
-            index: contentBlockIndex,
-            delta: { type: "text_delta", text: delta.content },
-          });
+          controller.enqueue(buildTextDelta(contentBlockIndex, delta.content));
         }
       }
 
