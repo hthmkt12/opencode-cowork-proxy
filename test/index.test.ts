@@ -242,7 +242,7 @@ describe('worker routing', () => {
     });
 
     const response = await worker.fetch(request);
-    const body = await response.json();
+    const body: any = await response.json();
     expect(body.model).toBe('claude-sonnet-4-5-20250514');
   });
 
@@ -584,7 +584,7 @@ describe('count_tokens short-circuit', () => {
     const response = await worker.fetch(request);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(response.status).toBe(200);
-    const body = await response.json();
+    const body: any = await response.json();
     expect(typeof body.input_tokens).toBe('number');
     expect(body.input_tokens).toBeGreaterThan(0);
   });
@@ -608,7 +608,7 @@ describe('count_tokens short-circuit', () => {
 
     const response = await worker.fetch(request);
     expect(fetchMock).not.toHaveBeenCalled();
-    const body = await response.json();
+    const body: any = await response.json();
     expect(body.input_tokens).toBe(10 + 85);
   });
 
@@ -626,7 +626,7 @@ describe('count_tokens short-circuit', () => {
 
     const response = await worker.fetch(request);
     expect(fetchMock).not.toHaveBeenCalled();
-    const body = await response.json();
+    const body: any = await response.json();
     expect(body.input_tokens).toBe(4);
   });
 
@@ -639,7 +639,7 @@ describe('count_tokens short-circuit', () => {
 
     const response = await worker.fetch(request);
     expect(response.status).toBe(200);
-    const body = await response.json();
+    const body: any = await response.json();
     expect(body.input_tokens).toBe(1);
   });
 
