@@ -6,7 +6,8 @@
     "dev": "npx wrangler dev",
     "deploy": "npx wrangler deploy",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "e2e": "node --experimental-strip-types scripts/e2e-smoke.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260504.1",
