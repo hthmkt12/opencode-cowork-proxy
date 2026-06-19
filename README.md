@@ -353,6 +353,107 @@ When translating Anthropic to OpenAI, the gateway injects a `prompt_cache_key` d
 
 Cache hit tokens from OpenAI-compatible usage metadata are mapped back to Anthropic's `cache_read_input_tokens` field.
 
+## Troubleshooting
+
+### `401 Invalid API key` (local gate)
+
+```
+{"error":{"type":"authentication_error","message":"Invalid API key: must be at least 32 characters."}}
+```
+
+**Cause**: The proxy validates the API key locally before any upstream call. It must be at least 32 characters and present in `x-api-key` or `Authorization: Bearer <key>`.
+
+**Fix**:
+- Check the key is in the right header: `x-api-key`, not `Authorization` without `Bearer`.
+- Get a fresh key from <https://opencode.ai/auth> if the current one is shorter than 32 chars.
+- Test directly: `curl -H "x-api-key: <KEY>" https://YOUR_WORKER/zen/v1/models`.
+
+### `401 CreditsError` from Zen path
+
+```
+{"type":"error","error":{"type":"CreditsError","message":"Insufficient balance."}}
+```
+
+**Cause**: `/zen` and `/go` use different billing on OpenCode. Go credits don't transfer to Zen. The free models on Zen (e.g. `mimo-v2.5-free`) have a separate rate limit; all other Zen models need paid credits.
+
+**Fix**:
+- Add Zen credits at <https://opencode.ai/workspace> → Billing.
+- For free usage only, stay on `/go` and pin models like `kimi-k2.6` or `deepseek-v4-flash` (Go tier).
+- For image requests, the proxy auto-routes `/go` image requests to `/zen` for `mimo-v2.5-free`; if Zen is exhausted those will fail with 429 instead.
+
+### `429 FreeUsageLimitError` on free models
+
+```
+{"type":"error","error":{"type":"FreeUsageLimitError","message":"Rate limit exceeded."}}
+```
+
+**Cause**: OpenCode's free models (`mimo-v2.5-free`, `deepseek-v4-flash-free`, `big-pickle`, `north-mini-code-free`, `nemotron-3-ultra-free`) reset on a per-account basis. `mimo-v2.5-free` is the only vision-capable free model and is shared across all free users.
+
+**Fix**:
+- Wait for the rate limit to reset (usually minutes to an hour).
+- Pin a paid model in the URL: `https://YOUR_WORKER/go/kimi-k2.6` skips `mimo-v2.5-free` for vision.
+- Subscribe to Zen credits for guaranteed availability.
+
+### Empty response: only `thinking` block, no `text`
+
+```json
+{
+  "content": [{"type": "thinking", "thinking": "..."}],
+  "stop_reason": "max_tokens"
+}
+```
+
+**Cause**: Reasoning-capable models (`deepseek-v4-flash`, `kimi-k2.6`, `minimax-m3`) emit long `reasoning_content` blocks before the final answer. If `max_tokens` is too small, the model exhausts the budget during thinking and never reaches the actual text.
+
+**Fix**:
+- Increase `max_tokens` in your request. Start with 500–1000 for reasoning models.
+- If you're using Claude Desktop, set the max output tokens in **Settings → Model**.
+- If you want a non-reasoning default, pin a model in the URL: `/go/kimi-k2.6` is faster for short tasks.
+
+### Streaming hangs or first byte is slow
+
+**Cause**: Cloudflare Workers can have a cold start on the first request after deploy (1-3 seconds). Subsequent requests are fast.
+
+**Fix**:
+- Warm up the worker with a low-stakes request after deploy.
+- The proxy supports streaming for all `/v1/messages` requests; if streaming is broken on the client, check that `stream: true` is in the request body.
+
+### `count_tokens` returns wrong estimate
+
+**Cause**: The proxy short-circuits `/v1/messages/count_tokens` with a local heuristic (chars/4 + 85 per image). It's a lower bound on purpose — Claude Desktop only uses this to display a context-window progress bar, not for billing.
+
+**Fix**:
+- If you need exact token counts, call the upstream API directly.
+- The estimate is intentionally conservative so the progress bar doesn't jump past actual usage.
+
+### Image request fails on `/go`
+
+**Cause**: The proxy auto-routes `/go` image requests to the `/zen` upstream (since `mimo-v2.5-free` is Zen-only). If Zen has no credits or the free model is rate-limited, the image will fail.
+
+**Fix**:
+- Use `/zen` URL directly if you have Zen credits.
+- Pin a vision-capable model in the URL: `/go/qwen3.6-plus` stays on Go and uses a vision model (note: requires Go tier support for qwen3.6-plus — check the [Go model list](https://opencode.ai/docs/go/#endpoints)).
+- Wait for the free vision model rate limit to reset.
+
+### `404` or model not found after URL pin
+
+**Cause**: The model ID in the URL path is unknown to the upstream, or it's only available on one of `/go` / `/zen`.
+
+**Fix**:
+- Check the model exists in the relevant list:
+  - [Go models](https://opencode.ai/docs/go/#endpoints)
+  - [Zen models](https://opencode.ai/docs/zen/#endpoints)
+- Some models (e.g. `gpt-5.5`, `claude-opus-4-8`) use non-`/chat/completions` endpoints and aren't supported by this proxy yet.
+
+### Request times out after 30s
+
+**Cause**: Cloudflare Workers have a 30-second CPU time limit on the free plan and a 30-second wall time on paid plans for streaming responses.
+
+**Fix**:
+- Reduce `max_tokens` for the task.
+- Switch to a faster, non-reasoning model: `/go/kimi-k2.6` or `/zen/glm-5`.
+- For long tasks, the worker can be deployed on a paid plan with extended limits.
+
 ## Development
 
 ```bash
