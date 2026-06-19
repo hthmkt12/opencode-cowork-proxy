@@ -151,8 +151,9 @@ async function handleRequest(request: Request): Promise<Response> {
           !userPinnedModel &&
           primaryModel === DEFAULT_TEXT_MODEL
         ) {
-          const probeBody = primaryRes.ok ? await primaryRes.clone().text() : await primaryRes.text();
-          if (isRetriableError(primaryRes, probeBody)) {
+          // Fast-path: 5xx and 429 are always retriable — no need to buffer body
+          if (primaryRes.status >= 500 || primaryRes.status === 429) {
+            const errorBody = await primaryRes.text();
             const fallbackReq = { ...openaiReq, model: VISION_MODEL };
             const fallbackRes = await fetch(`${ZEN_UPSTREAM}/chat/completions`, {
               method: "POST",
@@ -165,10 +166,34 @@ async function handleRequest(request: Request): Promise<Response> {
             if (fallbackRes.ok) {
               res = fallbackRes;
             } else {
-              return upstreamErrorResponse(primaryRes, probeBody);
+              return upstreamErrorResponse(primaryRes, errorBody);
             }
-          } else if (!primaryRes.ok) {
-            return upstreamErrorResponse(primaryRes, probeBody);
+          } else if (primaryRes.status === 200) {
+            // For streaming responses, trust 200 status — probing would buffer
+            // the entire SSE stream and kill perceived latency. For non-stream
+            // we still probe so an empty/malformed body triggers a retry.
+            if (!openaiReq.stream) {
+              const probeBody = await primaryRes.clone().text();
+              if (isRetriableError(primaryRes, probeBody)) {
+                const fallbackReq = { ...openaiReq, model: VISION_MODEL };
+                const fallbackRes = await fetch(`${ZEN_UPSTREAM}/chat/completions`, {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${key}`,
+                  },
+                  body: JSON.stringify(fallbackReq),
+                });
+                if (fallbackRes.ok) {
+                  res = fallbackRes;
+                } else {
+                  return upstreamErrorResponse(primaryRes, probeBody);
+                }
+              }
+            }
+          } else {
+            // 4xx client error — return as-is
+            return upstreamErrorResponse(primaryRes, await primaryRes.text());
           }
         } else if (!primaryRes.ok) {
           return upstreamErrorResponse(primaryRes, await primaryRes.text());
