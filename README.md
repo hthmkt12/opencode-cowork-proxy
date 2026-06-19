@@ -357,7 +357,8 @@ Cache hit tokens from OpenAI-compatible usage metadata are mapped back to Anthro
 
 ```bash
 npm install
-npm test
+npm test               # unit tests (no API key required)
+npm run e2e            # E2E smoke test against deployed worker (requires OPENCODE_API_KEY)
 npm run deploy -- --dry-run
 ```
 
