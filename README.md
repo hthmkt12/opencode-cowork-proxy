@@ -10,9 +10,15 @@ I covered how to set this up in Claude in [How to Use Claude Code for Free with 
 
 ### Image / Vision Support
 
-When you attach an image in Claude Code and send it through this proxy, the request is automatically routed to **Qwen3.6 Plus** (`qwen3.6-plus`) — a vision-capable model available on both OpenCode Go and OpenCode Zen. This happens transparently: the proxy detects image blocks in your request, translates them to OpenAI's image format, and overrides the model to Qwen3.6 Plus so the model can actually see the image.
+When you attach an image in Claude Code and send it through this proxy, the request is automatically routed to **MiMo-V2.5 Free** (`mimo-v2.5-free`) — a free vision-capable model available on OpenCode Zen. The proxy detects image blocks in your request, translates them to OpenAI's image format, and overrides the model to MiMo-V2.5 Free so the model can actually see the image.
+
+**Hybrid routing**: when your base URL uses the `/go` prefix, the proxy stays on Go for text requests (`deepseek-v4-flash` on `https://opencode.ai/zen/go/v1`) but **auto-switches the upstream to Zen** for image requests, because `mimo-v2.5-free` is Zen-only. Pinning a model in the URL (e.g. `/go/deepseek-v4-flash`) keeps the request on Go even with images.
 
 No configuration needed — it just works as long as you have an OpenCode Go or Zen subscription.
+
+### Default Text Model
+
+Text-only requests (no images) are routed to **DeepSeek V4 Flash** (`deepseek-v4-flash`) by default — a fast, cheap chat model on both OpenCode Go and Zen. If `deepseek-v4-flash` returns a retriable failure (5xx, 429, or an empty/malformed body), the proxy automatically falls back to the vision model **on Zen** so you don't get stuck on transient errors. Pin a model in the URL (e.g. `/go/kimi-k2.6`) to opt out of the auto-default and the fallback.
 
 ## Free Models
 
@@ -29,16 +35,16 @@ These models are available at `https://opencode.ai/zen/v1/chat/completions` via 
 
 ## Set Up In Claude
 
-If you want the fastest working setup, use `mimo-v2.5-free` as the first model.
+The proxy now defaults text requests to **`deepseek-v4-flash`** and image requests to **`mimo-v2.5-free`**. The recommended base URL is `/go`: text runs on Go (`https://opencode.ai/zen/go/v1`), and image requests auto-switch to Zen so the vision model is reachable. If you want to pin a different model, use the URL-override trick described in [Model Name Override](#model-name-override).
 
 1. Deploy this Worker to Cloudflare.
 2. Copy your deployed Worker URL.
 3. In Claude, open **Configure third-party Inference**.
 4. Choose the gateway / third-party inference option.
-5. Set the base URL to `YOUR_DEPLOYED_WORKER_URL/zen`.
+5. Set the base URL to `YOUR_DEPLOYED_WORKER_URL/go`.
 6. Set the auth scheme to `x-api-key`.
 7. Paste your OpenCode API key.
-8. Add `mimo-v2.5-free` as the model name.
+8. Add `deepseek-v4-flash` as the model name (the proxy will route this to the text model — pin a different ID in the URL to override).
 
 Important: do not add `/v1/messages` to the URL. Claude adds that path automatically.
 
@@ -49,12 +55,12 @@ Use these values in Claude's **Configure third-party Inference** screen:
 | Setting | Value |
 |---------|-------|
 | Provider | Gateway / third-party inference gateway |
-| Base URL | `YOUR_DEPLOYED_WORKER_URL/zen` |
+| Base URL | `YOUR_DEPLOYED_WORKER_URL/go` |
 | Auth scheme | `x-api-key` |
 | API key | Your OpenCode API key |
-| Models | Add manually, for example `mimo-v2.5-free` |
+| Models | Add manually, for example `deepseek-v4-flash` (text) or `mimo-v2.5-free` (vision) |
 
-For the default example above, use `/zen` because `mimo-v2.5-free` is a Zen model. Use `/go` for OpenCode Go models instead. Do not add `/v1/messages` yourself. Claude adds the API path automatically.
+For the default example above, use `/go` so the default text model runs on Go. Image requests auto-switch to Zen under the hood. Use `/zen` instead if you want both text and image to stay on Zen. Do not add `/v1/messages` yourself. Claude adds the API path automatically.
 
 ## What This Does
 
@@ -72,7 +78,7 @@ For example, use `YOUR_DEPLOYED_WORKER_URL/go` for Go models and `YOUR_DEPLOYED_
 
 It also handles tool calls, streaming, and DeepSeek reasoning output so coding-agent workflows work correctly.
 
-Important: this proxy has been live-tested with `minimax-m3` and `minimax-m2.7`. Other OpenCode Go models are included from the public OpenCode Go model list, but provider behavior can vary, especially around streaming usage/token accounting.
+Important: this proxy has been live-tested with `deepseek-v4-flash` (default text) and `mimo-v2.5-free` (default vision) on the Zen path. Other OpenCode Go models are included from the public OpenCode Go model list, but provider behavior can vary, especially around streaming usage/token accounting.
 
 ## Important Zen Limitation
 

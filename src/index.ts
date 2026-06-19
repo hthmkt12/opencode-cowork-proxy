@@ -10,7 +10,8 @@ import { streamAnthropicToOpenAI } from './translate/stream/anthropic-to-openai'
 const GO_UPSTREAM = "https://opencode.ai/zen/go/v1";
 const ZEN_UPSTREAM = "https://opencode.ai/zen/v1";
 const DEFAULT_UPSTREAM = GO_UPSTREAM;
-const VISION_MODEL = "qwen3.6-plus";
+const VISION_MODEL = "mimo-v2.5-free";
+const DEFAULT_TEXT_MODEL = "deepseek-v4-flash";
 
 const API_START_PATHS = new Set(['v1', 'v2']);
 
@@ -80,6 +81,23 @@ function hasImages(body: any): boolean {
   );
 }
 
+function isRetriableError(res: Response, body: string): boolean {
+  if (res.status === 401 || res.status === 403 || res.status === 400) return false;
+  if (res.status >= 500) return true;
+  if (res.status === 429) return true;
+  if (res.status === 200) {
+    try {
+      const parsed = JSON.parse(body);
+      const content = parsed?.choices?.[0]?.message?.content;
+      const reasoning = parsed?.choices?.[0]?.message?.reasoning_content;
+      if (!content && !reasoning) return true;
+    } catch {
+      return true;
+    }
+  }
+  return false;
+}
+
 function upstreamErrorResponse(res: Response, body: string): Response {
   const headers = new Headers();
   for (const name of ["Content-Type", "Retry-After", "RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset"]) {
@@ -103,12 +121,23 @@ async function handleRequest(request: Request): Promise<Response> {
       if (fmt === "openai") {
         const req = await request.json();
         const originalModel = req.model;
-        if (route.modelOverride) req.model = route.modelOverride;
-        if (hasImages(req)) {
-          req.model = VISION_MODEL;
+        const userPinnedModel = !!route.modelOverride;
+        const reqHasImages = hasImages(req);
+        if (route.modelOverride) {
+          req.model = route.modelOverride;
+        } else {
+          req.model = reqHasImages ? VISION_MODEL : DEFAULT_TEXT_MODEL;
+        }
+        // If user is on /go path with an image request, auto-switch upstream to /zen
+        // (vision model is Zen-only). Skip this when user pinned a model — explicit override wins.
+        let effectiveUpstream = upstream;
+        if (!userPinnedModel && upstream === GO_UPSTREAM && reqHasImages) {
+          effectiveUpstream = ZEN_UPSTREAM;
         }
         const openaiReq = formatAnthropicToOpenAI(req);
-        const res = await fetch(`${upstream}/chat/completions`, {
+        const primaryModel = openaiReq.model;
+
+        const primaryRes = await fetch(`${effectiveUpstream}/chat/completions`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -116,7 +145,34 @@ async function handleRequest(request: Request): Promise<Response> {
           },
           body: JSON.stringify(openaiReq),
         });
-        if (!res.ok) return upstreamErrorResponse(res, await res.text());
+
+        let res: Response = primaryRes;
+        if (
+          !userPinnedModel &&
+          primaryModel === DEFAULT_TEXT_MODEL
+        ) {
+          const probeBody = primaryRes.ok ? await primaryRes.clone().text() : await primaryRes.text();
+          if (isRetriableError(primaryRes, probeBody)) {
+            const fallbackReq = { ...openaiReq, model: VISION_MODEL };
+            const fallbackRes = await fetch(`${ZEN_UPSTREAM}/chat/completions`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${key}`,
+              },
+              body: JSON.stringify(fallbackReq),
+            });
+            if (fallbackRes.ok) {
+              res = fallbackRes;
+            } else {
+              return upstreamErrorResponse(primaryRes, probeBody);
+            }
+          } else if (!primaryRes.ok) {
+            return upstreamErrorResponse(primaryRes, probeBody);
+          }
+        } else if (!primaryRes.ok) {
+          return upstreamErrorResponse(primaryRes, await primaryRes.text());
+        }
 
         if (openaiReq.stream) {
           return new Response(streamOpenAIToAnthropic(res.body as ReadableStream, originalModel), {
