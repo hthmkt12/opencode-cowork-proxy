@@ -2,6 +2,13 @@ import { extractCachedTokens, extractOutputTokens, extractUncachedInputTokens } 
 
 const encoder = new TextEncoder();
 
+// Coalesce consecutive deltas of the same type before enqueueing. DeepSeek
+// reasoning can emit thousands of small deltas per second; each enqueue +
+// JSON.stringify costs CPU time and pushes the Worker over the 10ms Free-plan
+// limit. ~1KB batches cut enqueue count 50-100x with no perceptible latency
+// for live streaming (a typical 1-2KB upstream chunk flushes per read).
+const DELTA_FLUSH_BYTES = 1024;
+
 export function streamOpenAIToAnthropic(openaiStream: ReadableStream, model: string): ReadableStream {
   const messageId = "msg_" + Date.now();
 
@@ -53,6 +60,26 @@ export function streamOpenAIToAnthropic(openaiStream: ReadableStream, model: str
       let finishReason: string | null = null;
       let messageStarted = false;
 
+      // Pending deltas: accumulate same-type deltas so we enqueue once per
+      // batch instead of once per token. Flushed on type transition, size
+      // threshold, or stream end. See DELTA_FLUSH_BYTES above.
+      let pendingThinking: { index: number; text: string } | null = null;
+      let pendingText: { index: number; text: string } | null = null;
+
+      const flushPendingThinking = () => {
+        if (pendingThinking) {
+          controller.enqueue(buildThinkingDelta(pendingThinking.index, pendingThinking.text));
+          pendingThinking = null;
+        }
+      };
+      const flushPendingText = () => {
+        if (pendingText) {
+          controller.enqueue(buildTextDelta(pendingText.index, pendingText.text));
+          pendingText = null;
+        }
+      };
+      const flushPending = () => { flushPendingThinking(); flushPendingText(); };
+
       const reader = openaiStream.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
@@ -75,6 +102,9 @@ export function streamOpenAIToAnthropic(openaiStream: ReadableStream, model: str
 
         // Handle tool calls
         if (delta.tool_calls?.length > 0) {
+          // Tool call interrupts any pending text/thinking deltas
+          flushPending();
+
           for (const toolCall of delta.tool_calls) {
             const toolCallId = toolCall.id;
 
@@ -140,6 +170,9 @@ export function streamOpenAIToAnthropic(openaiStream: ReadableStream, model: str
             }
           }
         } else if (delta.reasoning_content) {
+          // Transitioning into thinking: flush any pending text
+          if (pendingText) flushPendingText();
+
           if (isToolUse || hasStartedTextBlock) {
             enqueueSSE(controller, "content_block_stop", {
               type: "content_block_stop",
@@ -167,8 +200,19 @@ export function streamOpenAIToAnthropic(openaiStream: ReadableStream, model: str
             hasStartedThinkingBlock = true;
           }
 
-          controller.enqueue(buildThinkingDelta(contentBlockIndex, delta.reasoning_content));
+          if (pendingThinking) {
+            pendingThinking.text += delta.reasoning_content;
+          } else {
+            pendingThinking = { index: contentBlockIndex, text: delta.reasoning_content };
+          }
+
+          if (pendingThinking.text.length >= DELTA_FLUSH_BYTES) {
+            flushPendingThinking();
+          }
         } else if (delta.content) {
+          // Transitioning into text: flush any pending thinking
+          if (pendingThinking) flushPendingThinking();
+
           if (isToolUse || hasStartedThinkingBlock) {
             enqueueSSE(controller, "content_block_stop", {
               type: "content_block_stop",
@@ -196,7 +240,15 @@ export function streamOpenAIToAnthropic(openaiStream: ReadableStream, model: str
             hasStartedTextBlock = true;
           }
 
-          controller.enqueue(buildTextDelta(contentBlockIndex, delta.content));
+          if (pendingText) {
+            pendingText.text += delta.content;
+          } else {
+            pendingText = { index: contentBlockIndex, text: delta.content };
+          }
+
+          if (pendingText.text.length >= DELTA_FLUSH_BYTES) {
+            flushPendingText();
+          }
         }
       }
 
@@ -242,6 +294,9 @@ export function streamOpenAIToAnthropic(openaiStream: ReadableStream, model: str
       } finally {
         reader.releaseLock();
       }
+
+      // Flush any remaining pending deltas before closing the last block
+      flushPending();
 
       // Close last content block
       if (isToolUse || hasStartedTextBlock || hasStartedThinkingBlock) {
