@@ -454,6 +454,21 @@ Cache hit tokens from OpenAI-compatible usage metadata are mapped back to Anthro
 - Switch to a faster, non-reasoning model: `/go/kimi-k2.6` or `/zen/glm-5`.
 - For long tasks, the worker can be deployed on a paid plan with extended limits.
 
+### `503` Worker exceeded resource limits (Error 1102)
+
+```
+Error 1102: Worker exceeded resource limits (CPU time or memory) and was terminated.
+```
+
+**Cause**: Cloudflare Workers on the Free plan have a **10ms CPU time** limit per request. Long reasoning streams (e.g. `deepseek-v4-flash`, `kimi-k2.6`) emit thousands of small SSE deltas per second; each `enqueue` + `JSON.stringify` costs CPU and adds up fast. The proxy now batches consecutive same-type deltas into 1KB chunks to stay under the limit, but extreme requests (e.g. very long thinking with 10K+ tokens) can still exceed it.
+
+**Fix**:
+- This proxy already batches deltas (see `src/translate/stream/openai-to-anthropic.ts` and `anthropic-to-openai.ts`) — make sure you're running a deployed version newer than commit `e4303d1` / `a36ec80`.
+- Reduce `max_tokens` for very long reasoning tasks. Reasoning models use budget on the `thinking` block first; with low `max_tokens` the model exhausts it during thinking and never reaches the answer (see "Empty response: only `thinking` block" above).
+- Switch to a non-reasoning model for short tasks: `/go/kimi-k2.6` (Go tier) or `/zen/glm-5` (Zen tier).
+- For persistent 1102 errors on Free plan, upgrade to Workers Paid ($5/mo) — raises the CPU limit to 30s.
+- The same request always hits the same limit, so retrying won't help.
+
 ## Development
 
 ```bash
