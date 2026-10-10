@@ -325,12 +325,18 @@ describe('worker routing', () => {
     expect(fetchMock).toHaveBeenCalledWith('https://opencode.ai/zen/v1/chat/completions', expect.anything());
   });
 
-  it('routes muse-spark-1.3-contributor-free on /zen cleanly', async () => {
+  it('routes muse-spark-1.3-contributor-free on /zen to /responses', async () => {
     let capturedBody: any = null;
+    let capturedUrl: string | null = null;
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async (_url, init: any) => {
+      async (url: any, init: any) => {
+        capturedUrl = url;
         capturedBody = JSON.parse(init.body);
-        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+        return new Response(JSON.stringify({
+          id: 'resp_123',
+          output: [{ type: 'message', content: [{ type: 'output_text', text: 'ok' }] }],
+          usage: { input_tokens: 10, output_tokens: 5 },
+        }), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         });
@@ -347,13 +353,112 @@ describe('worker routing', () => {
       }),
     });
 
-    await worker.fetch(request);
+    const response = await worker.fetch(request);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(capturedUrl).toBe('https://opencode.ai/zen/v1/responses');
     expect(capturedBody.model).toBe('muse-spark-1.3-contributor-free');
-    expect(fetchMock).toHaveBeenCalledWith('https://opencode.ai/zen/v1/chat/completions', expect.anything());
+    expect(Array.isArray(capturedBody.input)).toBe(true);
+    expect(capturedBody.max_output_tokens).toBe(1024);
+    // Response preserves the original client-facing model name
+    const body: any = await response.json();
+    expect(body.model).toBe('muse-spark-1.3-contributor-free');
+    expect(body.content?.[0]?.text).toBe('ok');
   });
 
-  it('auto-routes /go image requests to /zen upstream with mimo-v2.5-free', async () => {
+  it('routes responses models on /go prefix to Zen /responses', async () => {
+    let capturedUrl: string | null = null;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (url: any, _init: any) => {
+        capturedUrl = url;
+        return new Response(JSON.stringify({
+          id: 'resp_1',
+          output: [{ type: 'message', content: [{ type: 'output_text', text: 'hi' }] }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      },
+    );
+
+    const request = new Request('https://proxy.example/go/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({
+        model: 'muse-spark-1.3-contributor-free',
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 50,
+      }),
+    });
+
+    await worker.fetch(request);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(capturedUrl).toBe('https://opencode.ai/zen/v1/responses');
+  });
+
+  it('routes URL-pinned muse-spark model to /responses', async () => {
+    let capturedUrl: string | null = null;
+    let capturedBody: any = null;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (url: any, init: any) => {
+        capturedUrl = url;
+        capturedBody = JSON.parse(init.body);
+        return new Response(JSON.stringify({
+          id: 'resp_2',
+          output: [{ type: 'message', content: [{ type: 'output_text', text: 'pinned' }] }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      },
+    );
+
+    const request = new Request('https://proxy.example/zen/muse-spark-1.3-contributor-free/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-5-20250514',
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 50,
+      }),
+    });
+
+    const response = await worker.fetch(request);
+    expect(capturedUrl).toBe('https://opencode.ai/zen/v1/responses');
+    expect(capturedBody.model).toBe('muse-spark-1.3-contributor-free');
+    const body: any = await response.json();
+    // Original placeholder name preserved for the client
+    expect(body.model).toBe('claude-sonnet-4-5-20250514');
+  });
+
+  it('passes /v1/responses through to Zen /responses', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('{"id":"resp_3"}', { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+
+    const request = new Request('https://proxy.example/zen/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({ model: 'muse-spark-1.3-contributor-free', input: 'hi' }),
+    });
+
+    await worker.fetch(request);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://opencode.ai/zen/v1/responses',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('rejects /v1/chat/completions with a responses-only model and a helpful error', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+
+    const request = new Request('https://proxy.example/zen/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({ model: 'muse-spark-1.3-contributor-free', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+
+    const response = await worker.fetch(request);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(response.status).toBe(400);
+    const body: any = await response.json();
+    expect(body.error.message).toContain('/v1/responses');
+  });
+
+  it('auto-routes /go image requests to /zen upstream with mimo-v2.6-flash-free', async () => {
     let capturedUrl: string | null = null;
     let capturedBody: any = null;
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
@@ -386,7 +491,7 @@ describe('worker routing', () => {
     await worker.fetch(request);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(capturedUrl).toBe('https://opencode.ai/zen/v1/chat/completions');
-    expect(capturedBody.model).toBe('mimo-v2.5-free');
+    expect(capturedBody.model).toBe('mimo-v2.6-flash-free');
     expect(Array.isArray(capturedBody.messages[0].content)).toBe(true);
     expect(capturedBody.messages[0].content).toEqual([
       { type: 'text', text: 'What is in this image?' },
@@ -394,7 +499,7 @@ describe('worker routing', () => {
     ]);
   });
 
-  it('overrides model to mimo-v2.5-free when image attachments are present on the zen path', async () => {
+  it('overrides model to mimo-v2.6-flash-free when image attachments are present on the zen path', async () => {
     let capturedBody: any = null;
     vi.spyOn(globalThis, 'fetch').mockImplementation(
       async (_url, init: any) => {
@@ -410,7 +515,7 @@ describe('worker routing', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': key },
       body: JSON.stringify({
-        model: 'mimo-v2.5-free',
+        model: 'mimo-v2.6-flash-free',
         messages: [{
           role: 'user',
           content: [
@@ -423,7 +528,7 @@ describe('worker routing', () => {
     });
 
     await worker.fetch(request);
-    expect(capturedBody.model).toBe('mimo-v2.5-free');
+    expect(capturedBody.model).toBe('mimo-v2.6-flash-free');
   });
 
   it('does not auto-route /go image requests when user pinned a model in URL', async () => {
@@ -489,7 +594,7 @@ describe('worker routing', () => {
     expect(capturedBody.model).toBe('deepseek-v4-flash');
   });
 
-  it('falls back to mimo-v2.5-free when deepseek-v4-flash returns 5xx', async () => {
+  it('falls back to mimo-v2.6-flash-free when deepseek-v4-flash returns 5xx', async () => {
     const calls: any[] = [];
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
       async (_url, init: any) => {
@@ -517,10 +622,10 @@ describe('worker routing', () => {
     await worker.fetch(request);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(calls[0].model).toBe('deepseek-v4-flash');
-    expect(calls[1].model).toBe('mimo-v2.5-free');
+    expect(calls[1].model).toBe('mimo-v2.6-flash-free');
   });
 
-  it('falls back to mimo-v2.5-free when deepseek-v4-flash returns 429', async () => {
+  it('falls back to mimo-v2.6-flash-free when deepseek-v4-flash returns 429', async () => {
     const calls: any[] = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(
       async (_url, init: any) => {
@@ -547,10 +652,10 @@ describe('worker routing', () => {
 
     await worker.fetch(request);
     expect(calls[0].model).toBe('deepseek-v4-flash');
-    expect(calls[1].model).toBe('mimo-v2.5-free');
+    expect(calls[1].model).toBe('mimo-v2.6-flash-free');
   });
 
-  it('falls back to mimo-v2.5-free when deepseek-v4-flash returns an empty body', async () => {
+  it('falls back to mimo-v2.6-flash-free when deepseek-v4-flash returns an empty body', async () => {
     const calls: any[] = [];
     vi.spyOn(globalThis, 'fetch').mockImplementation(
       async (_url, init: any) => {
@@ -580,7 +685,7 @@ describe('worker routing', () => {
 
     await worker.fetch(request);
     expect(calls[0].model).toBe('deepseek-v4-flash');
-    expect(calls[1].model).toBe('mimo-v2.5-free');
+    expect(calls[1].model).toBe('mimo-v2.6-flash-free');
   });
 
   it('does not fall back when user pinned a model in the URL path', async () => {
@@ -639,7 +744,7 @@ describe('worker routing', () => {
     expect(urls[0]).toBe('https://opencode.ai/zen/go/v1/chat/completions');
     expect(urls[1]).toBe('https://opencode.ai/zen/v1/chat/completions');
     expect(calls[0].model).toBe('deepseek-v4-flash');
-    expect(calls[1].model).toBe('mimo-v2.5-free');
+    expect(calls[1].model).toBe('mimo-v2.6-flash-free');
   });
 });
 

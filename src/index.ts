@@ -2,22 +2,26 @@ import { Hono } from 'hono';
 import { extractApiKey, validateApiKey, authErrorResponse } from './auth';
 import { formatAnthropicToOpenAI } from './translate/request/anthropic-to-openai';
 import { formatOpenAIToAnthropic } from './translate/request/openai-to-anthropic';
+import { formatAnthropicToResponses } from './translate/request/anthropic-to-responses';
 import { formatOpenAIToAnthropic as toAnthropicResponse } from './translate/response/openai-to-anthropic';
 import { formatAnthropicToOpenAI as toOpenAIResponse } from './translate/response/anthropic-to-openai';
+import { formatResponsesToAnthropic } from './translate/response/responses-to-anthropic';
 import { streamOpenAIToAnthropic } from './translate/stream/openai-to-anthropic';
 import { streamAnthropicToOpenAI } from './translate/stream/anthropic-to-openai';
+import { streamResponsesToAnthropic } from './translate/stream/responses-to-anthropic';
+import { isResponsesModel } from './responses';
 
 const GO_UPSTREAM = "https://opencode.ai/zen/go/v1";
 const ZEN_UPSTREAM = "https://opencode.ai/zen/v1";
 const DEFAULT_UPSTREAM = GO_UPSTREAM;
-const VISION_MODEL = "mimo-v2.5-free";
+const VISION_MODEL = "mimo-v2.6-flash-free";
 const DEFAULT_TEXT_MODEL = "deepseek-v4-flash";
 
 const API_START_PATHS = new Set(['v1', 'v2']);
 
 // Claude Desktop's third-party-inference flow sends Anthropic-style placeholder
 // model names (e.g. claude-sonnet-4-5-20250514) that have no OpenCode equivalent,
-// so the proxy maps them to the smart default (deepseek-v4-flash / mimo-v2.5-free).
+// so the proxy maps them to the smart default (deepseek-v4-flash / mimo-v2.6-flash-free).
 // Real clients like Claude Code send the actual model ID (e.g. deepseek-v4-flash-free)
 // — those must be honored as-is so users can pick a model directly without URL pinning.
 function isAnthropicPlaceholder(model: string): boolean {
@@ -191,6 +195,43 @@ async function handleRequest(request: Request): Promise<Response> {
         if (!userPinnedModel && upstream === GO_UPSTREAM && reqHasImages) {
           effectiveUpstream = ZEN_UPSTREAM;
         }
+        // Responses-API models (gpt-*, grok-*, muse-spark-*) are Zen-only.
+        // Route them to Zen even when the client used the /go prefix.
+        if (effectiveUpstream === GO_UPSTREAM && isResponsesModel(req.model)) {
+          effectiveUpstream = ZEN_UPSTREAM;
+        }
+
+        // Zen models served via OpenAI Responses API (/v1/responses), e.g.
+        // muse-spark-1.3-contributor-free, gpt-5.x, grok-4.x.
+        if (isResponsesModel(req.model)) {
+          const responsesReq = formatAnthropicToResponses(req);
+          const res = await fetch(`${effectiveUpstream}/responses`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${key}`,
+            },
+            body: JSON.stringify(responsesReq),
+          });
+          if (!res.ok) {
+            return upstreamErrorResponse(res, await res.text());
+          }
+          if (responsesReq.stream) {
+            return new Response(streamResponsesToAnthropic(res.body as ReadableStream, originalModel), {
+              headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive" },
+            });
+          }
+          let respData: any;
+          try {
+            respData = await res.json();
+          } catch {
+            return upstreamErrorResponse(res, await res.clone().text().catch(() => "Invalid upstream JSON"));
+          }
+          return new Response(JSON.stringify(formatResponsesToAnthropic(respData, originalModel)), {
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+
         const openaiReq = formatAnthropicToOpenAI(req);
         const primaryModel = openaiReq.model;
 
@@ -276,11 +317,51 @@ async function handleRequest(request: Request): Promise<Response> {
       return res;
   }
 
+  // OpenAI Responses passthrough (for OpenAI SDK users calling
+  // /v1/responses directly with gpt-*/grok-*/muse-spark-* models).
+  if (route.path === '/v1/responses' && request.method === 'POST') {
+      const key = extractApiKey(request.headers);
+      const err = validateApiKey(key);
+      if (err) return authErrorResponse(err);
+
+      let effectiveUpstream = upstream;
+      if (effectiveUpstream === GO_UPSTREAM) {
+        effectiveUpstream = ZEN_UPSTREAM;
+      }
+      const res = await fetch(`${effectiveUpstream}/responses`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${key}` },
+        body: await request.text(),
+      });
+      return res;
+  }
+
   // OpenAI → Anthropic (or pass-through)
   if (route.path === '/v1/chat/completions' && request.method === 'POST') {
       const key = extractApiKey(request.headers);
       const err = validateApiKey(key);
       if (err) return authErrorResponse(err);
+
+      // Responses-API models (muse-spark-*, gpt-*, grok-*) are NOT served
+      // via /chat/completions on Zen. Guide callers to the right endpoint
+      // instead of proxying to a guaranteed upstream 404.
+      if (fmt !== "anthropic") {
+        let maybeModel: string | null = route.modelOverride;
+        if (!maybeModel) {
+          try {
+            const raw: any = await request.clone().json();
+            maybeModel = typeof raw?.model === "string" ? raw.model : null;
+          } catch { maybeModel = null; }
+        }
+        if (isResponsesModel(maybeModel)) {
+          return new Response(JSON.stringify({
+            error: {
+              type: "invalid_request_error",
+              message: `Model '${maybeModel}' is served via the OpenAI Responses API, not /chat/completions. Use POST ${route.modelOverride ? "" : "/v1/responses"} with {"model":"${maybeModel}","input":[...]} — or call the Anthropic path POST /v1/messages with {"model":"${maybeModel}","messages":[...]} and this proxy will translate to /responses for you.`,
+            },
+          }), { status: 400, headers: { "Content-Type": "application/json" } });
+        }
+      }
 
       if (fmt === "anthropic") {
         const req = await request.json();
@@ -339,8 +420,9 @@ async function handleRequest(request: Request): Promise<Response> {
       "/zen": ZEN_UPSTREAM,
     },
     endpoints: {
-      "/v1/messages": "Anthropic → upstream (translated if upstream=openai)",
+      "/v1/messages": "Anthropic → upstream (translated if upstream=openai; responses models go to /responses)",
       "/v1/chat/completions": "OpenAI → upstream (translated if upstream=anthropic)",
+      "/v1/responses": "OpenAI Responses passthrough (gpt-*/grok-*/muse-spark-*)",
       "/v1/models": "Model discovery proxy",
     },
   }, null, 2), {
