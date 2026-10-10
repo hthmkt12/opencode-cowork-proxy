@@ -171,7 +171,7 @@ const scenarios: Scenario[] = [
   },
 
   {
-    name: "POST /go/v1/messages with image auto-routes to zen (mimo-v2.5-free)",
+    name: "POST /go/v1/messages with image auto-routes to zen (mimo-v2.6-flash-free)",
     timeoutMs: 90000,
     run: async () => {
       // Tiny 1x1 PNG (67 bytes), base64 encoded
@@ -190,7 +190,7 @@ const scenarios: Scenario[] = [
           },
         ],
       });
-      // mimo-v2.5-free is rate-limited; skip on FreeUsageLimitError
+      // mimo-v2.6-flash-free is rate-limited; skip on FreeUsageLimitError
       if (res.status === 429) {
         const body = await res.text();
         if (body.includes("FreeUsageLimitError") || body.includes("Rate limit")) {

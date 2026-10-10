@@ -10,9 +10,9 @@ I covered how to set this up in Claude in [How to Use Claude Code for Free with 
 
 ### Image / Vision Support
 
-When you attach an image in Claude Code and send it through this proxy, the request is automatically routed to **MiMo-V2.5 Free** (`mimo-v2.5-free`) — a free vision-capable model available on OpenCode Zen. The proxy detects image blocks in your request, translates them to OpenAI's image format, and overrides the model to MiMo-V2.5 Free so the model can actually see the image.
+When you attach an image in Claude Code and send it through this proxy, the request is automatically routed to **MiMo-V2.6-Flash Free** (`mimo-v2.6-flash-free`) — a free vision-capable model available on OpenCode Zen. The proxy detects image blocks in your request, translates them to OpenAI's image format, and overrides the model to MiMo-V2.6-Flash Free so the model can actually see the image.
 
-**Hybrid routing**: when your base URL uses the `/go` prefix, the proxy stays on Go for text requests (`deepseek-v4-flash` on `https://opencode.ai/zen/go/v1`) but **auto-switches the upstream to Zen** for image requests, because `mimo-v2.5-free` is Zen-only. Pinning a model in the URL (e.g. `/go/deepseek-v4-flash`) keeps the request on Go even with images.
+**Hybrid routing**: when your base URL uses the `/go` prefix, the proxy stays on Go for text requests (`deepseek-v4-flash` on `https://opencode.ai/zen/go/v1`) but **auto-switches the upstream to Zen** for image requests, because `mimo-v2.6-flash-free` is Zen-only. Pinning a model in the URL (e.g. `/go/deepseek-v4-flash`) keeps the request on Go even with images.
 
 No configuration needed — it just works as long as you have an OpenCode Go or Zen subscription.
 
@@ -30,7 +30,7 @@ We support a pay-as-you-go model. Below are the prices per 1M tokens for complet
 |-------|----------|-------|--------|-------------|
 | Big Pickle | `big-pickle` | Free | Free | Free |
 | DeepSeek V4 Flash Free | `deepseek-v4-flash-free` | Free | Free | Free |
-| MiMo-V2.5 Free | `mimo-v2.5-free` | Free | Free | Free |
+| MiMo-V2.6-Flash Free | `mimo-v2.6-flash-free` | Free | Free | Free |
 | Muse Spark 1.3 Contributor Free | `muse-spark-1.3-contributor-free` | Free | Free | Free |
 | Nemotron 3 Super Free | `nemotron-3-super-free` | Free | Free | Free |
 
@@ -93,7 +93,7 @@ Use these values in Claude's **Configure third-party Inference** screen:
 | Base URL | `YOUR_DEPLOYED_WORKER_URL/go` |
 | Auth scheme | `x-api-key` |
 | API key | Your OpenCode API key |
-| Models | Add manually, for example `deepseek-v4-flash` (text) or `mimo-v2.5-free` (vision) |
+| Models | Add manually, for example `deepseek-v4-flash` (text) or `mimo-v2.6-flash-free` (vision) |
 
 For the default example above, use `/go` so the default text model runs on Go. Image requests auto-switch to Zen under the hood. Use `/zen` instead if you want both text and image to stay on Zen. Do not add `/v1/messages` yourself. Claude adds the API path automatically.
 
@@ -115,7 +115,7 @@ For example, use `YOUR_DEPLOYED_WORKER_URL/go` for Go models and `YOUR_DEPLOYED_
 
 It also handles tool calls, streaming, and DeepSeek reasoning output so coding-agent workflows work correctly.
 
-Important: this proxy has been live-tested with `deepseek-v4-flash` (default text) and `mimo-v2.5-free` (default vision) on the Zen path. Other OpenCode Go models are included from the public OpenCode Go model list, but provider behavior can vary, especially around streaming usage/token accounting.
+Important: this proxy has been live-tested with `deepseek-v4-flash` (default text) and `mimo-v2.6-flash-free` (default vision) on the Zen path. Other OpenCode Go models are included from the public OpenCode Go model list, but provider behavior can vary, especially around streaming usage/token accounting.
 
 ## Important Zen Limitation
 
@@ -125,15 +125,42 @@ This proxy currently works with Zen models that use the OpenAI-compatible `/chat
 
 Known Zen model categories that should work through `/zen`:
 
-| Zen model category | Examples |
-|--------------------|----------|
-| OpenAI-compatible chat models | `minimax-m2.7`, `minimax-m2.5`, `mimo-v2.5-free`, `glm-5.1`, `glm-5`, `kimi-k2.5`, `kimi-k2.6`, `grok-build-0.1`, `big-pickle`, `deepseek-v4-flash`, `deepseek-v4-flash-free`, `nemotron-3-super-free` |
+| Zen model category | Endpoint used by proxy | Examples |
+|--------------------|------------------------|----------|
+| OpenAI-compatible chat models | `/chat/completions` | `minimax-m2.7`, `minimax-m2.5`, `mimo-v2.6-flash-free`, `glm-5.1`, `glm-5`, `kimi-k2.5`, `kimi-k2.6`, `big-pickle`, `deepseek-v4-flash`, `deepseek-v4-flash-free`, `nemotron-3-super-free` |
+| Responses-API models (auto-routed to `/responses`) | `/responses` | `muse-spark-1.3-contributor-free`, `muse-spark-1.3`, `muse-spark-1.2`, `gpt-5.5`, `gpt-5.4`, `gpt-5.3-codex`, `grok-4.5`, `grok-build-0.1` |
+
+### Muse Spark 1.3 Free
+
+`muse-spark-1.3-contributor-free` is a free Zen model served via the OpenAI
+Responses API. The proxy auto-detects it (any `muse-spark-*`, `gpt-*`, `grok-*`
+model ID) and translates Anthropic `/v1/messages` to upstream `/responses`:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://opencode-cowork-proxy.worldnew.workers.dev/zen",
+    "ANTHROPIC_AUTH_TOKEN": "YOUR_OPENCODE_API_KEY",
+    "ANTHROPIC_API_KEY": ""
+  },
+  "model": "muse-spark-1.3-contributor-free"
+}
+```
+
+```bash
+export ANTHROPIC_BASE_URL="https://opencode-cowork-proxy.worldnew.workers.dev/zen"
+export ANTHROPIC_AUTH_TOKEN="YOUR_OPENCODE_API_KEY"
+claude --model muse-spark-1.3-contributor-free
+```
+
+URL pinning also works (useful for Claude Desktop placeholder names):
+`YOUR_WORKER_URL/zen/muse-spark-1.3-contributor-free`. Responses models are
+Zen-only, so a `/go` prefix with a responses model auto-switches to Zen.
 
 Known Zen model categories that do not work yet through this proxy:
 
 | Zen model category | Why it does not work yet |
 |--------------------|--------------------------|
-| GPT models such as `gpt-5.5`, `gpt-5.5-pro`, `gpt-5.4`, `gpt-5.4-pro`, `gpt-5.3-codex`, `gpt-5.2` | Zen exposes these through `/responses`, and this proxy does not yet translate Anthropic Messages to OpenAI Responses API. |
 | Claude models such as `claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5` | Zen exposes these through `/messages`; this proxy's `/zen` Claude path currently translates to OpenAI-compatible `/chat/completions`. |
 | Qwen models such as `qwen3.7-max`, `qwen3.6-plus`, `qwen3.5-plus` | Zen exposes these through `/messages` (Anthropic-compatible), not `/chat/completions`. |
 | Gemini models such as `gemini-3.5-flash`, `gemini-3.1-pro`, `gemini-3-flash` | Zen exposes these through model-specific endpoints, not the generic chat-completions path used here. |
@@ -302,12 +329,12 @@ Prefix routes:
 Claude Desktop may reject model names that don't look like Anthropic models (e.g. `claude-sonnet-4-5` or `anthropic/claude-*`). To work around this, embed the real model name in the URL path after the prefix:
 
 ```
-YOUR_DEPLOYED_WORKER_URL/zen/mimo-v2.5-free   # free Zen models
+YOUR_DEPLOYED_WORKER_URL/zen/mimo-v2.6-flash-free   # free Zen models
 YOUR_DEPLOYED_WORKER_URL/go/deepseek-v4-pro   # paid Go models
 YOUR_DEPLOYED_WORKER_URL/go/kimi-k2.6         # paid Go models, skip all smart routing
 ```
 
-Claude appends `/v1/messages`, so the full request becomes `YOUR_WORKER_URL/zen/mimo-v2.5-free/v1/messages`. The proxy extracts the model from the path and uses it regardless of what Claude sends in the request body.
+Claude appends `/v1/messages`, so the full request becomes `YOUR_WORKER_URL/zen/mimo-v2.6-flash-free/v1/messages`. The proxy extracts the model from the path and uses it regardless of what Claude sends in the request body.
 
 **What URL pinning skips** (use it when you want full control):
 
@@ -315,7 +342,7 @@ Claude appends `/v1/messages`, so the full request becomes `YOUR_WORKER_URL/zen/
 |----------|-----------------|-------------------------------|
 | Default text model | Honored as-is if real model ID; placeholder `claude-*` forced to `deepseek-v4-flash` | Uses the pinned model |
 | Image → Zen auto-route | `/go` image requests auto-switch to Zen upstream | Stays on `/go` even with images |
-| Fallback on failure | Tries `mimo-v2.5-free` on Zen if `deepseek-v4-flash` fails | Returns the original error to the client |
+| Fallback on failure | Tries `mimo-v2.6-flash-free` on Zen if `deepseek-v4-flash` fails | Returns the original error to the client |
 
 **Usage:**
 1. Configure Claude with any Anthropic-looking model name (e.g. `claude-sonnet-4-5-20250514`) — this passes Claude's client-side validation.
@@ -325,7 +352,7 @@ Claude appends `/v1/messages`, so the full request becomes `YOUR_WORKER_URL/zen/
 
 | Setting | Value |
 |---------|-------|
-| Base URL | `YOUR_WORKER_URL/zen/mimo-v2.5-free` |
+| Base URL | `YOUR_WORKER_URL/zen/mimo-v2.6-flash-free` |
 | Auth scheme | `x-api-key` |
 | API key | Your OpenCode API key |
 | Model | `claude-sonnet-4-5-20250514` (any Anthropic-looking name) |
@@ -409,12 +436,12 @@ Cache hit tokens from OpenAI-compatible usage metadata are mapped back to Anthro
 {"type":"error","error":{"type":"CreditsError","message":"Insufficient balance."}}
 ```
 
-**Cause**: `/zen` and `/go` use different billing on OpenCode. Go credits don't transfer to Zen. The free models on Zen (e.g. `mimo-v2.5-free`) have a separate rate limit; all other Zen models need paid credits.
+**Cause**: `/zen` and `/go` use different billing on OpenCode. Go credits don't transfer to Zen. The free models on Zen (e.g. `mimo-v2.6-flash-free`) have a separate rate limit; all other Zen models need paid credits.
 
 **Fix**:
 - Add Zen credits at <https://opencode.ai/workspace> → Billing.
 - For free usage only, stay on `/go` and pin models like `kimi-k2.6` or `deepseek-v4-flash` (Go tier).
-- For image requests, the proxy auto-routes `/go` image requests to `/zen` for `mimo-v2.5-free`; if Zen is exhausted those will fail with 429 instead.
+- For image requests, the proxy auto-routes `/go` image requests to `/zen` for `mimo-v2.6-flash-free`; if Zen is exhausted those will fail with 429 instead.
 
 ### `429 FreeUsageLimitError` on free models
 
@@ -422,12 +449,45 @@ Cache hit tokens from OpenAI-compatible usage metadata are mapped back to Anthro
 {"type":"error","error":{"type":"FreeUsageLimitError","message":"Rate limit exceeded."}}
 ```
 
-**Cause**: OpenCode's free models (`mimo-v2.5-free`, `deepseek-v4-flash-free`, `big-pickle`, `north-mini-code-free`, `nemotron-3-ultra-free`) reset on a per-account basis. `mimo-v2.5-free` is the only vision-capable free model and is shared across all free users.
+**Cause**: OpenCode's free models (`mimo-v2.6-flash-free`, `deepseek-v4-flash-free`, `big-pickle`, `north-mini-code-free`, `nemotron-3-ultra-free`) reset on a per-account basis. `mimo-v2.6-flash-free` is the only vision-capable free model and is shared across all free users.
 
 **Fix**:
 - Wait for the rate limit to reset (usually minutes to an hour).
-- Pin a paid model in the URL: `https://YOUR_WORKER/go/kimi-k2.6` skips `mimo-v2.5-free` for vision.
+- Pin a paid model in the URL: `https://YOUR_WORKER/go/kimi-k2.6` skips `mimo-v2.6-flash-free` for vision.
 - Subscribe to Zen credits for guaranteed availability.
+
+### `403 FreeTierError` on free models (verified live Oct 2026)
+
+```
+{"type":"error","error":{"type":"FreeTierError","message":"OpenCode's free tier can only be used from within OpenCode"}}
+```
+
+**Cause**: Upstream gateway policy, not a proxy bug. OpenCode restricts
+`-free` models (e.g. `muse-spark-1.3-contributor-free`, `mimo-v2.6-flash-free`)
+to requests coming from the genuine OpenCode app. Third-party API clients —
+including this proxy, OMP, and raw `curl` — get `403 FreeTierError` even with
+a valid key, while the same key works inside `opencode` itself. Verified live:
+free-model requests reach the gateway and return a policy verdict, and a
+nonexistent-model probe through the same proxy path returns an upstream
+model-availability error, proving the translation plumbing is correct.
+
+**Fix**:
+- Use the free models inside the genuine OpenCode app: `opencode run --model opencode/muse-spark-1.3-contributor-free "..."` (no proxy needed).
+- Through this proxy, use paid models (e.g. `muse-spark-1.3`, `deepseek-v4-flash`, `kimi-k2.6`) with Zen credits.
+- Do not fake OpenCode client-identity headers (`User-Agent: opencode/...`, `x-opencode-session`) to bypass this gate — third parties probing it have had accounts restricted (`403 [user_blocked]`) for policy violations.
+
+### `410 ModelDeprecated` (model retired upstream)
+
+```
+{"error":{"type":"ModelDeprecated","message":"Model mimo-v2.5-free has been deprecated. Use mimo-v2.6-flash-free instead."}}
+```
+
+**Cause**: OpenCode retired the model ID. The proxy's default vision model was
+updated accordingly (`mimo-v2.6-flash-free`).
+
+**Fix**:
+- Update the proxy to a version with the new default (this repo tracks replacements as they are discovered live).
+- Or pin the replacement in the URL: `YOUR_WORKER_URL/zen/mimo-v2.6-flash-free`.
 
 ### Empty response: only `thinking` block, no `text`
 
@@ -463,7 +523,7 @@ Cache hit tokens from OpenAI-compatible usage metadata are mapped back to Anthro
 
 ### Image request fails on `/go`
 
-**Cause**: The proxy auto-routes `/go` image requests to the `/zen` upstream (since `mimo-v2.5-free` is Zen-only). If Zen has no credits or the free model is rate-limited, the image will fail.
+**Cause**: The proxy auto-routes `/go` image requests to the `/zen` upstream (since `mimo-v2.6-flash-free` is Zen-only). If Zen has no credits or the free model is rate-limited, the image will fail.
 
 **Fix**:
 - Use `/zen` URL directly if you have Zen credits.
