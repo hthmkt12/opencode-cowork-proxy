@@ -18,7 +18,9 @@ No configuration needed — it just works as long as you have an OpenCode Go or 
 
 ### Default Text Model
 
-Text-only requests (no images) are routed to **DeepSeek V4 Flash** (`deepseek-v4-flash`) by default — a fast, cheap chat model on both OpenCode Go and Zen. If `deepseek-v4-flash` returns a retriable failure (5xx, 429, or an empty/malformed body), the proxy automatically falls back to the vision model **on Zen** so you don't get stuck on transient errors. Pin a model in the URL (e.g. `/go/kimi-k2.6`) to opt out of the auto-default and the fallback.
+Text-only requests (no images) with an **Anthropic-style placeholder model name** (e.g. `claude-sonnet-4-5-20250514`) are routed to **DeepSeek V4 Flash** (`deepseek-v4-flash`) by default — a fast, cheap chat model on both OpenCode Go and Zen. If `deepseek-v4-flash` returns a retriable failure (5xx, 429, or an empty/malformed body), the proxy automatically falls back to the vision model **on Zen** so you don't get stuck on transient errors.
+
+**Real model IDs sent by the client are honored as-is.** Claude Code and OpenAI-compatible clients send actual OpenCode model IDs (e.g. `deepseek-v4-flash-free`, `kimi-k2.6`), and the proxy passes them through untouched — no URL pin needed. Pin a model in the URL (e.g. `/go/kimi-k2.6`) to force a model regardless of what the client sends.
 
 ## Free Models
 
@@ -31,12 +33,46 @@ We support a pay-as-you-go model. Below are the prices per 1M tokens for complet
 | MiMo-V2.5 Free | `mimo-v2.5-free` | Free | Free | Free |
 | North Mini Code Free | `north-mini-code-free` | Free | Free | Free |
 | Nemotron 3 Ultra Free | `nemotron-3-ultra-free` | Free | Free | Free |
+| Muse Spark 1.3 Contributor Free | `muse-spark-1.3-contributor-free` | Free | Free | Free |
+| Nemotron 3 Super Free | `nemotron-3-super-free` | Free | Free | Free |
 
 These models are available at `https://opencode.ai/zen/v1/chat/completions` via the `/zen` prefix. For the full model list and latest pricing, see the [OpenCode Zen endpoint docs](https://opencode.ai/docs/zen/#endpoints).
 
-## Set Up In Claude
+## Set Up In Claude Code
 
-The proxy now defaults text requests to **`deepseek-v4-flash`** and image requests to **`mimo-v2.5-free`**. The recommended base URL is `/go`: text runs on Go (`https://opencode.ai/zen/go/v1`), and image requests auto-switch to Zen so the vision model is reachable. If you want to pin a different model, use the URL-override trick described in [Model Name Override](#model-name-override).
+Claude Code sends the real OpenCode model ID in the request body, so no URL pinning is needed. Configure it directly:
+
+| Setting | Value |
+|---------|-------|
+| Base URL | `https://opencode-cowork-proxy.worldnew.workers.dev/zen` |
+| Model | `deepseek-v4-flash-free` (or any real OpenCode model ID) |
+
+In `C:\Users\<you>\.claude\settings.json`:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://opencode-cowork-proxy.worldnew.workers.dev/zen",
+    "ANTHROPIC_AUTH_TOKEN": "YOUR_OPENCODE_API_KEY",
+    "ANTHROPIC_API_KEY": ""
+  },
+  "model": "deepseek-v4-flash-free"
+}
+```
+
+Or via environment variables:
+
+```bash
+export ANTHROPIC_BASE_URL="https://opencode-cowork-proxy.worldnew.workers.dev/zen"
+export ANTHROPIC_AUTH_TOKEN="YOUR_OPENCODE_API_KEY"
+claude --model deepseek-v4-flash-free
+```
+
+**Important:** do not append `/v1/messages` to the base URL — Claude adds that path automatically. And do **not** embed a model ID in the base URL path for Claude Code — the client already sends the real model ID, so URL pinning is unnecessary and can produce a doubled model name (e.g. `deepseek-v4-flash-free/deepseek-v4-flash-free`).
+
+## Set Up In Claude Desktop
+
+Claude Desktop sends Anthropic-style model names, so it needs the URL-override trick described in [Model Name Override](#model-name-override). The recommended base URL is `/go`: text runs on Go (`https://opencode.ai/zen/go/v1`), and image requests auto-switch to Zen so the vision model is reachable.
 
 1. Deploy this Worker to Cloudflare.
 2. Copy your deployed Worker URL.
@@ -283,7 +319,7 @@ Claude appends `/v1/messages`, so the full request becomes `YOUR_WORKER_URL/zen/
 
 | Behavior | Without URL pin | With URL pin (`/go/kimi-k2.6`) |
 |----------|-----------------|-------------------------------|
-| Default text model | Forced to `deepseek-v4-flash` | Uses the pinned model |
+| Default text model | Honored as-is if real model ID; placeholder `claude-*` forced to `deepseek-v4-flash` | Uses the pinned model |
 | Image → Zen auto-route | `/go` image requests auto-switch to Zen upstream | Stays on `/go` even with images |
 | Fallback on failure | Tries `mimo-v2.5-free` on Zen if `deepseek-v4-flash` fails | Returns the original error to the client |
 

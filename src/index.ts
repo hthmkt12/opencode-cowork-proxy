@@ -15,6 +15,16 @@ const DEFAULT_TEXT_MODEL = "deepseek-v4-flash";
 
 const API_START_PATHS = new Set(['v1', 'v2']);
 
+// Claude Desktop's third-party-inference flow sends Anthropic-style placeholder
+// model names (e.g. claude-sonnet-4-5-20250514) that have no OpenCode equivalent,
+// so the proxy maps them to the smart default (deepseek-v4-flash / mimo-v2.5-free).
+// Real clients like Claude Code send the actual model ID (e.g. deepseek-v4-flash-free)
+// — those must be honored as-is so users can pick a model directly without URL pinning.
+function isAnthropicPlaceholder(model: string): boolean {
+  if (!model) return true;
+  return model.startsWith("claude-");
+}
+
 type RouteConfig = {
   path: string;
   upstream: string;
@@ -168,9 +178,13 @@ async function handleRequest(request: Request): Promise<Response> {
         const reqHasImages = hasImages(req);
         if (route.modelOverride) {
           req.model = route.modelOverride;
-        } else {
-          req.model = reqHasImages ? VISION_MODEL : DEFAULT_TEXT_MODEL;
+        } else if (reqHasImages) {
+          req.model = VISION_MODEL;
+        } else if (isAnthropicPlaceholder(req.model)) {
+          req.model = DEFAULT_TEXT_MODEL;
         }
+        // else: honor the real model ID the client sent (e.g. Claude Code
+        // configured with deepseek-v4-flash-free directly — no URL pin needed).
         // If user is on /go path with an image request, auto-switch upstream to /zen
         // (vision model is Zen-only). Skip this when user pinned a model — explicit override wins.
         let effectiveUpstream = upstream;
