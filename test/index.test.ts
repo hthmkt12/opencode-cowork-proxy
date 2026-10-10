@@ -246,9 +246,34 @@ describe('worker routing', () => {
     expect(body.model).toBe('claude-sonnet-4-5-20250514');
   });
 
-  it('forces text requests to deepseek-v4-flash when no model segment in path', async () => {
+  it('forces text requests to deepseek-v4-flash when client sends an Anthropic placeholder model', async () => {
     let capturedBody: any = null;
     vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (_url, init: any) => {
+        capturedBody = JSON.parse(init.body);
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/go/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-5-20250514',
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+
+    await worker.fetch(request);
+    expect(capturedBody.model).toBe('deepseek-v4-flash');
+  });
+
+  it('honors a real model ID sent by the client when no model segment in path', async () => {
+    let capturedBody: any = null;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
       async (_url, init: any) => {
         capturedBody = JSON.parse(init.body);
         return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
@@ -268,7 +293,64 @@ describe('worker routing', () => {
     });
 
     await worker.fetch(request);
-    expect(capturedBody.model).toBe('deepseek-v4-flash');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(capturedBody.model).toBe('deepseek-v4-pro');
+  });
+
+  it('honors a free Zen model ID sent by the client on /zen without URL pin', async () => {
+    let capturedBody: any = null;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (_url, init: any) => {
+        capturedBody = JSON.parse(init.body);
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/zen/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({
+        model: 'deepseek-v4-flash-free',
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 1024,
+      }),
+    });
+
+    await worker.fetch(request);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(capturedBody.model).toBe('deepseek-v4-flash-free');
+    expect(fetchMock).toHaveBeenCalledWith('https://opencode.ai/zen/v1/chat/completions', expect.anything());
+  });
+
+  it('routes muse-spark-1.3-contributor-free on /zen cleanly', async () => {
+    let capturedBody: any = null;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (_url, init: any) => {
+        capturedBody = JSON.parse(init.body);
+        return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    );
+
+    const request = new Request('https://proxy.example/zen/v1/messages', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': key },
+      body: JSON.stringify({
+        model: 'muse-spark-1.3-contributor-free',
+        messages: [{ role: 'user', content: 'hello' }],
+        max_tokens: 1024,
+      }),
+    });
+
+    await worker.fetch(request);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(capturedBody.model).toBe('muse-spark-1.3-contributor-free');
+    expect(fetchMock).toHaveBeenCalledWith('https://opencode.ai/zen/v1/chat/completions', expect.anything());
   });
 
   it('auto-routes /go image requests to /zen upstream with mimo-v2.5-free', async () => {
@@ -380,7 +462,7 @@ describe('worker routing', () => {
     expect(capturedBody.model).toBe('deepseek-v4-flash');
   });
 
-  it('defaults text-only requests to deepseek-v4-flash when no model is pinned in URL', async () => {
+  it('defaults text-only requests to deepseek-v4-flash when an Anthropic placeholder model is sent', async () => {
     let capturedBody: any = null;
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
       async (_url, init: any) => {
@@ -396,7 +478,7 @@ describe('worker routing', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': key },
       body: JSON.stringify({
-        model: 'minimax-m2.7',
+        model: 'claude-sonnet-4-5-20250514',
         messages: [{ role: 'user', content: 'hi' }],
         max_tokens: 1024,
       }),
@@ -426,7 +508,7 @@ describe('worker routing', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': key },
       body: JSON.stringify({
-        model: 'minimax-m2.7',
+        model: 'claude-sonnet-4-5-20250514',
         messages: [{ role: 'user', content: 'hi' }],
         max_tokens: 1024,
       }),
@@ -457,7 +539,7 @@ describe('worker routing', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': key },
       body: JSON.stringify({
-        model: 'minimax-m2.7',
+        model: 'claude-sonnet-4-5-20250514',
         messages: [{ role: 'user', content: 'hi' }],
         max_tokens: 1024,
       }),
@@ -490,7 +572,7 @@ describe('worker routing', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': key },
       body: JSON.stringify({
-        model: 'minimax-m2.7',
+        model: 'claude-sonnet-4-5-20250514',
         messages: [{ role: 'user', content: 'hi' }],
         max_tokens: 1024,
       }),
@@ -547,7 +629,7 @@ describe('worker routing', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': key },
       body: JSON.stringify({
-        model: 'minimax-m2.7',
+        model: 'claude-sonnet-4-5-20250514',
         messages: [{ role: 'user', content: 'hi' }],
         max_tokens: 1024,
       }),
